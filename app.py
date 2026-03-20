@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-st.set_page_config(page_title="쿠팡 발주서 LOT 할당 (환산 기준)", layout="wide")
-st.title("📦 쿠팡 발주서 LOT 자동 할당 (환산 재고 차감 방식)")
+st.set_page_config(page_title="쿠팡 발주서 LOT 할당 (재고 0 제외)", layout="wide")
+st.title("📦 쿠팡 발주서 LOT 자동 할당 (환산 > 0 조건 반영)")
 
 uploaded_file = st.file_uploader("쿠팡 서식 엑셀 파일(단일 파일)을 업로드하세요", type=['xlsx'])
 
@@ -21,11 +21,11 @@ if uploaded_file:
                 df_stock['유효일자'] = pd.to_datetime(df_stock['유효일자'])
                 df_stock = df_stock.sort_values(by=['상품', '유효일자']).reset_index(drop=True)
                 
-                # 결과 기입 열 초기화 (기존 데이터가 있다면 덮어쓰기 위해)
+                # 결과 기입 열 초기화
                 df_upload['LOT'] = ""
                 df_upload['유효일자'] = ""
 
-                # 2. 할당 로직 (환산 열 기준 차감)
+                # 2. 할당 로직
                 for index, row in df_upload.iterrows():
                     mecode = row['MECODE']
                     order_qty = row['수량']
@@ -33,26 +33,32 @@ if uploaded_file:
                     if pd.isna(mecode) or order_qty <= 0:
                         continue
                         
-                    # 해당 MECODE의 재고 중 [환산] 수량이 주문수량 이상인 LOT 필터링
-                    # '환산' 열을 가용 재고의 총합으로 간주함
-                    mask = (df_stock['상품'] == mecode) & (df_stock['환산'] >= order_qty)
+                    # [수정된 필터링] 
+                    # 1. MECODE 일치 
+                    # 2. 환산 재고가 0보다 큼 (이걸 빼먹어서 0인 애들이 들어갔을 수 있습니다)
+                    # 3. 환산 재고가 주문 수량 이상
+                    mask = (
+                        (df_stock['상품'] == mecode) & 
+                        (df_stock['환산'] > 0) & 
+                        (df_stock['환산'] >= order_qty)
+                    )
                     available_lots = df_stock[mask]
                     
                     if not available_lots.empty:
                         target_idx = available_lots.index[0]
                         s_row = available_lots.loc[target_idx]
                         
-                        # 업로드 시트에 할당 정보 기입
+                        # 할당 정보 기입
                         df_upload.at[index, 'LOT'] = s_row['화주LOT']
                         df_upload.at[index, '유효일자'] = s_row['유효일자'].strftime('%Y-%m-%d')
                         
-                        # [핵심] '환산' 열에서 주문 수량만큼 차감 (누적 반영)
+                        # 재고 차감 (실시간 반영)
                         df_stock.at[target_idx, '환산'] -= order_qty
                     else:
-                        # 재고 부족 시 빈칸 유지 (혹은 필요시 '재고부족' 등 텍스트 기입 가능)
+                        # 재고가 0이거나 부족한 경우 빈칸 유지
                         pass
 
-                st.success("✅ 할당 및 환산 재고 차감이 완료되었습니다!")
+                st.success("✅ 할당 완료! (환산 0인 재고는 제외되었습니다)")
 
                 # 3. 엑셀 파일 생성
                 output = BytesIO()
